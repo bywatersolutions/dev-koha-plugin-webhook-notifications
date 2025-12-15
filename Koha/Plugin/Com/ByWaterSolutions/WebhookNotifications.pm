@@ -42,7 +42,7 @@ our $metadata = {
 our $instance = C4::Context->config('database');
 $instance =~ s/koha_//;
 
-our $default_archive_dir = $ENV{WEBHOOK_ARCHIVE_PATH} || "/var/lib/koha/$instance/webhook_notifications_archive";
+our $default_archive_dir = C4::Context->config('webhook_archive_path') || "/var/lib/koha/$instance/webhook_notifications_archive";
 
 unless (-d $default_archive_dir) {
     make_path($default_archive_dir) or die "Failed to create path '$default_archive_dir': $!";
@@ -145,12 +145,12 @@ Fetches an OAuth2 access token using client credentials flow.
 sub get_oauth_token {
     my ($self) = @_;
 
-    my $auth_url      = $ENV{WEBHOOK_AUTH_URL};
-    my $client_id     = $ENV{WEBHOOK_CLIENT_ID};
-    my $client_secret = $ENV{WEBHOOK_CLIENT_SECRET};
+    my $auth_url      = C4::Context->config('webhook_auth_url');
+    my $client_id     = C4::Context->config('webhook_client_id');
+    my $client_secret = C4::Context->config('webhook_client_secret');
 
     unless ($auth_url && $client_id && $client_secret) {
-        die "Missing required environment variables: WEBHOOK_AUTH_URL, WEBHOOK_CLIENT_ID, WEBHOOK_CLIENT_SECRET";
+        die "Missing required koha-conf.xml config: webhook_auth_url, webhook_client_id, webhook_client_secret";
     }
 
     my $ua = LWP::UserAgent->new(timeout => 30);
@@ -187,13 +187,13 @@ Sends notice data to the configured webhook endpoint.
 sub send_to_webhook {
     my ($self, $params) = @_;
 
-    my $notice_url  = $ENV{WEBHOOK_NOTICE_URL};
-    my $customer_id = $ENV{WEBHOOK_CUSTOMER_ID};
+    my $notice_url  = C4::Context->config('webhook_notice_url');
+    my $customer_id = C4::Context->config('webhook_customer_id');
     my $token       = $params->{token};
     my $payload     = $params->{payload};
 
     unless ($notice_url) {
-        die "Missing required environment variable: WEBHOOK_NOTICE_URL";
+        die "Missing required koha-conf.xml config: webhook_notice_url";
     }
 
     my $ua = LWP::UserAgent->new(timeout => 60);
@@ -241,8 +241,8 @@ sub before_send_messages {
         return;
     }
 
-    my $test_mode = $ENV{WEBHOOK_TEST_MODE};
-    my $verbose   = $ENV{WEBHOOK_VERBOSE} || $params->{verbose};
+    my $test_mode = C4::Context->config('webhook_test_mode');
+    my $verbose   = C4::Context->config('webhook_verbose') || $params->{verbose};
 
     my $library_name = C4::Context->preference('LibraryName');
     $library_name =~ s/ /_/g;
@@ -360,10 +360,10 @@ sub before_send_messages {
         };
     }
 
-    while (1) {
-        my @messages = Koha::Notice::Messages->search($search_params, $other_params)->as_list;
-        INFO("FOUND " . scalar @messages . " MESSAGES TO PROCESS");
-        last unless scalar @messages;
+    my @messages = Koha::Notice::Messages->search($search_params, $other_params)->as_list;
+    INFO("FOUND " . scalar @messages . " MESSAGES TO PROCESS");
+
+    if (scalar @messages) {
 
         $info->{total_messages_count} += scalar @messages;
 
