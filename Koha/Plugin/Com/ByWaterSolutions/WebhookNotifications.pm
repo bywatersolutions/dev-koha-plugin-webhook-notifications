@@ -4,25 +4,20 @@ use Modern::Perl;
 
 use base qw(Koha::Plugins::Base);
 
-use C4::Auth;
 use C4::Context;
 use C4::Log qw(logaction);
 use Koha::DateUtils qw(dt_from_string);
 
 use Data::Dumper;
-use DateTime;
 use File::Path qw(make_path);
 use File::Slurp qw(write_file);
 use File::Temp qw(tempdir);
-use HTTP::Request;
 use List::Util qw(any);
 use Log::Log4perl qw(:easy);
-use Log::Log4perl;
 use LWP::UserAgent;
 use Mojo::JSON qw(encode_json decode_json);
 use POSIX;
 use Try::Tiny;
-use URI;
 use YAML::XS qw(Load);
 
 our $VERSION         = "{VERSION}";
@@ -30,8 +25,8 @@ our $MINIMUM_VERSION = "{MINIMUM_VERSION}";
 
 our $metadata = {
     name            => 'Webhook Notifications',
-    author          => 'Kyle M Hall',
-    date_authored   => '2021-09-20',
+    author          => 'Samuel Mahr',
+    date_authored   => '2025-12-09',
     date_updated    => "1900-01-01",
     minimum_version => $MINIMUM_VERSION,
     maximum_version => undef,
@@ -43,13 +38,6 @@ our $instance = C4::Context->config('database');
 $instance =~ s/koha_//;
 
 our $default_archive_dir = C4::Context->config('webhook_archive_path') || "/var/lib/koha/$instance/webhook_notifications_archive";
-
-unless (-d $default_archive_dir) {
-    make_path($default_archive_dir) or die "Failed to create path '$default_archive_dir': $!";
-    print "Nested directory created: $default_archive_dir\n";
-} else {
-    print "Directory already exists: $default_archive_dir\n";
-}
 
 =head3 new
 
@@ -105,6 +93,10 @@ or false if it failed.
 
 sub install() {
     my ($self, $args) = @_;
+
+    unless (-d $default_archive_dir) {
+        make_path($default_archive_dir) or die "Failed to create path '$default_archive_dir': $!";
+    }
 
     return 1;
 }
@@ -283,7 +275,7 @@ sub before_send_messages {
                 opendir $dirh, $archive_dir or die "Cannot open directory: $!";
             } catch {
                 $info->{error_message} = $_;
-                logaction('WEBHOOK_NOTIFICATIONS', 'CREATE_DIR_FAILED', undef, JSON->new->pretty->encode($info), 'cron') if $is_cronjob;
+                logaction('WEBHOOK_NOTIFICATIONS', 'CREATE_DIR_FAILED', undef, encode_json($info), 'cron') if $is_cronjob;
                 die "Cannot open directory $archive_dir: $_";
             };
             my @files = readdir $dirh;
@@ -291,8 +283,10 @@ sub before_send_messages {
 
             foreach my $f (@files) {
                 next unless $f =~ /log|json$/;
-                if ($f lt $age_threshold) {
-                    unlink($archive_dir . "/" . $f);
+                my $filepath = "$archive_dir/$f";
+                my $file_mtime = (stat($filepath))[9];
+                if ($file_mtime && $file_mtime < $dt->epoch) {
+                    unlink($filepath);
                 }
             }
         }
@@ -355,7 +349,7 @@ sub before_send_messages {
             $is_cronjob && say "WEBHOOK - ERROR - Failed to get OAuth token: $_";
             ERROR("Failed to get OAuth token: $_");
             $info->{oauth_error} = $_;
-            logaction('WEBHOOK_NOTIFICATIONS', 'OAUTH_FAILED', undef, JSON->new->pretty->encode($info), 'cron') if $is_cronjob;
+            logaction('WEBHOOK_NOTIFICATIONS', 'OAUTH_FAILED', undef, encode_json($info), 'cron') if $is_cronjob;
             return;
         };
     }
@@ -501,7 +495,7 @@ sub before_send_messages {
                             $m->update({status => 'failed', failure_code => "Bib for old hold with id $yaml->{old_hold} not found"}) && next unless $biblio;
 
                             my $biblioitem = $biblio->biblioitem;
-                            $m->update({status => 'failed', failure_code => "Bib for old hold with id $yaml->{old_hold} not found"}) && next unless $biblio;
+                            $m->update({status => 'failed', failure_code => "Bib for old hold with id $yaml->{old_hold} not found"}) && next unless $biblioitem;
 
                             $patron //= $hold->patron;
                             $data->{patron} //= $self->scrub_patron($patron->unblessed);
@@ -678,7 +672,7 @@ sub before_send_messages {
     }
 
     logaction('WEBHOOK_NOTIFICATIONS', 'DONE', undef, undef, 'cron') if $is_cronjob;
-    logaction('WEBHOOK_NOTIFICATIONS', 'MESSAGES_PROCESSED', undef, JSON->new->pretty->encode($info), 'cron') if $is_cronjob;
+    logaction('WEBHOOK_NOTIFICATIONS', 'MESSAGES_PROCESSED', undef, encode_json($info), 'cron') if $is_cronjob;
 }
 
 =head3 build_minimal_payload
