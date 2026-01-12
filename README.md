@@ -12,7 +12,7 @@ This plugin enables Koha to forward message/notice data to a webhook endpoint fo
 
 ## Downloading
 
-From the [release page](https://github.com/bywatersolutions/koha-plugin-webhook-notifications/releases) you can download the latest release in `kpz` format.
+From the [release page](https://github.com/springshare/koha-plugin-webhook-notifications/releases) you can download the latest release in `kpz` format.
 
 ## Installation
 
