@@ -48,6 +48,10 @@ Additional settings are available in the Koha plugin configuration:
 - **Archive Directory**: Override the default archive path
 - **Skip Overdue Calls**: Option to skip phone calls for overdues if patron has email/SMS
 
+## Security
+
+OAuth2 credentials are securely stored in encrypted form using Koha's encryption system (AES-256). Credentials can be configured via the plugin's admin interface or through environment variables in `koha-conf.xml`. When configured via `koha-conf.xml`, credentials are automatically migrated to encrypted system preferences during plugin install or upgrade. Client secrets are masked for security in the admin interface.
+
 ## Authentication Flow
 
 The plugin uses OAuth2 client credentials flow:
