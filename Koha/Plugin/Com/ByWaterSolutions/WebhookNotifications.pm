@@ -37,6 +37,9 @@ our $metadata = {
 our $instance = C4::Context->config('database');
 $instance =~ s/koha_//;
 
+# Cache for OAuth2 credentials to avoid redundant DB reads and decryption
+our $oauth_credentials_cache;
+
 our $default_archive_dir = C4::Context->config('webhook_archive_path') || "/var/lib/koha/$instance/webhook_notifications_archive";
 
 =head3 new
@@ -105,6 +108,13 @@ sub configure {
             $self->set_encrypted_syspref('WebhookCredentials', $credentials);
             INFO("OAuth credentials configured via system preference");
         } else {
+            # Invalidate cache if credentials were cleared
+            if (defined $cgi->param('auth_url') || defined $cgi->param('client_id') ||
+                defined $cgi->param('client_secret') || defined $cgi->param('notice_url')) {
+                $self->invalidate_oauth_credentials_cache();
+                INFO("OAuth credentials cache invalidated");
+            }
+
             # If any credential field is provided, validate required fields
             if ($auth_url || $client_id || $client_secret || $notice_url) {
                 unless ($auth_url && $client_id && $client_secret && $notice_url) {
@@ -909,10 +919,14 @@ Returns undef if credentials are not configured.
 sub get_oauth_credentials {
     my ($self) = @_;
 
+    # Return cached credentials if available
+    return $oauth_credentials_cache if $oauth_credentials_cache;
+
     # Try encrypted system preference first
     my $encrypted = C4::Context->preference('WebhookCredentials');
     if ($encrypted) {
-        return $self->decrypt_credentials($encrypted);
+        $oauth_credentials_cache = $self->decrypt_credentials($encrypted);
+        return $oauth_credentials_cache;
     }
 
     # Fallback to koha-conf.xml (plain text)
@@ -923,13 +937,14 @@ sub get_oauth_credentials {
     my $customer_id   = C4::Context->config('webhook_customer_id');
 
     if ($auth_url && $client_id && $client_secret && $notice_url) {
-        return {
+        $oauth_credentials_cache = {
             auth_url      => $auth_url,
             client_id     => $client_id,
             client_secret => $client_secret,
             notice_url    => $notice_url,
             customer_id   => $customer_id,
         };
+        return $oauth_credentials_cache;
     }
 
     return undef;
@@ -1016,6 +1031,21 @@ sub set_encrypted_syspref {
     my $encrypted = $self->encrypt_credentials($credentials);
 
     C4::Context->set_preference($preference_name, $encrypted);
+
+    # Invalidate cache to ensure next credential retrieval fetches new values
+    $oauth_credentials_cache = undef;
+}
+
+=head3 invalidate_oauth_credentials_cache
+
+Explicitly invalidates the OAuth2 credentials cache. Useful when credentials
+have been updated via admin interface.
+
+=cut
+
+sub invalidate_oauth_credentials_cache {
+    my ($self) = @_;
+    $oauth_credentials_cache = undef;
 }
 
 sub api_namespace {
