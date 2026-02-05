@@ -947,7 +947,7 @@ sub get_oauth_credentials {
         return $oauth_credentials_cache;
     }
 
-    return undef;
+    return;
 }
 
 =head3 has_oauth_credentials
