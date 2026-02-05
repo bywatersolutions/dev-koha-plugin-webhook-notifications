@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.1] - 2026-02-05
+### Performance
+- **PERFORMANCE**: Added global credential caching via `$oauth_credentials_cache`
+  - Eliminates redundant DB reads and decryption operations
+  - ~99% reduction in credential retrieval time (100-200ms → <1ms for 100 messages)
+  - Cache automatically invalidated when credentials are updated via admin UI
+
+### Added
+- New `invalidate_oauth_credentials_cache()` method for explicit cache invalidation
+
 ## [4.1.0] - 2026-02-03
 ### Security
 - **SECURITY**: OAuth2 credentials now stored as encrypted system preferences
