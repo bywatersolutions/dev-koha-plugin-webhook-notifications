@@ -975,7 +975,7 @@ Returns the display value for the auth URL, checking system preference first the
 
 sub get_display_auth_url {
     my ($self) = @_;
-    my $syspref = $self->get_decrypted_syspref( C4::Context->preference('WebhookCredentials') );
+    my $syspref = $self->get_decrypted_syspref('WebhookCredentials');
     return $syspref->{auth_url} if $syspref;
     return C4::Context->config('webhook_auth_url') // '';
 }
@@ -1028,7 +1028,7 @@ Retrieves and decrypts webhook credentials from system preference.
 sub get_decrypted_syspref {
     my ($self, $preference_name) = @_;
 
-    my $syspref = C4::Context->preference('WebhookCredentials');
+    my $syspref = C4::Context->preference($preference_name);
     my $decrypted_json = $self->decrypt_credentials($syspref);
     my $decrypted = decode_json( $decrypted_json );
 
@@ -1043,9 +1043,8 @@ Encrypts and stores OAuth2 credentials as a system preference.
 
 sub set_encrypted_syspref {
     my ($self, $preference_name, $credentials) = @_;
-    my $json_creds = encode_json( $credentials );
 
-    my $encrypted = $self->encrypt_credentials($json_creds);
+    my $encrypted = $self->encrypt_credentials($credentials);
 
     C4::Context->set_preference($preference_name, $encrypted);
 

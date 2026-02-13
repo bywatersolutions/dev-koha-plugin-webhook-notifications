@@ -14,14 +14,12 @@
     <h1>Webhook Notifications Configuration</h1>
 
     <div class="alert alert-info">
-        <div class="alert alert-info">
-            <strong>Additional Information:</strong>
-            <ul>
-                <li>Credentials are encrypted using AES-256 encryption</li>
-                <li>You can configure credentials either through this form or via koha-conf.xml (for backward compatibility)</li>
-                <li>If you previously configured via koha-conf.xml, they will be automatically migrated to an encrypted local system preference: WebhookCredentials</li>
-            </ul>
-        </div>
+	<strong>Additional Information:</strong>
+	<ul>
+	    <li>Credentials are encrypted using AES-256 encryption</li>
+	    <li>You can configure credentials either through this form or via koha-conf.xml (for backward compatibility)</li>
+	    <li>If you previously configured via koha-conf.xml, they will be automatically migrated to an encrypted local system preference: WebhookCredentials</li>
+	</ul>
     </div>
 
     <form method="get">
