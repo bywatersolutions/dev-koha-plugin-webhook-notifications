@@ -1030,9 +1030,7 @@ sub get_decrypted_syspref {
 
     my $syspref = C4::Context->preference($preference_name);
     if ( $syspref ) {
-        my $decrypted_json = $self->decrypt_credentials($syspref);
-        my $decrypted = decode_json( $decrypted_json );
-        return $decrypted;
+        return $self->decrypt_credentials($syspref);
     }
 }
 
