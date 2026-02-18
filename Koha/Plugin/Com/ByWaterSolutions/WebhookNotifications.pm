@@ -37,6 +37,9 @@ our $metadata = {
 our $instance = C4::Context->config('database');
 $instance =~ s/koha_//;
 
+# Cache for OAuth2 credentials to avoid redundant DB reads and decryption
+our $oauth_credentials_cache;
+
 our $default_archive_dir = C4::Context->config('webhook_archive_path') || "/var/lib/koha/$instance/webhook_notifications_archive";
 
 =head3 new
@@ -69,15 +72,72 @@ sub configure {
             archive_dir                        => $self->retrieve_data('archive_dir') || $default_archive_dir,
             payload_format                     => $self->retrieve_data('payload_format') || 'full',
             skip_odue_if_other_if_sms_or_email => $self->retrieve_data('skip_odue_if_other_if_sms_or_email'),
+            has_oauth_credentials             => $self->has_oauth_credentials(),
+            auth_url                           => $self->get_display_auth_url(),
+            client_id                          => $self->get_display_client_id(),
+            client_secret                      => '••••••••••••',
+            notice_url                         => $self->get_display_notice_url(),
+            customer_id                        => $self->get_display_customer_id(),
         );
 
         $self->output_html($template->output());
     } else {
+        # Save plugin-specific settings
         $self->store_data({
             archive_dir                        => $cgi->param('archive_dir'),
             payload_format                     => $cgi->param('payload_format'),
             skip_odue_if_other_if_sms_or_email => $cgi->param('skip_odue_if_other_if_sms_or_email'),
         });
+
+        # Save encrypted credentials if provided
+        my $auth_url      = $cgi->param('auth_url');
+        my $client_id     = $cgi->param('client_id');
+        my $client_secret = $cgi->param('client_secret');
+        my $notice_url    = $cgi->param('notice_url');
+        my $customer_id   = $cgi->param('customer_id');
+
+        if ($auth_url && $client_id && $client_secret && $notice_url) {
+            my $credentials = {
+                auth_url      => $auth_url,
+                client_id     => $client_id,
+                client_secret => $client_secret,
+                notice_url    => $notice_url,
+                customer_id   => $customer_id // '',
+            };
+
+            $self->set_encrypted_syspref('WebhookCredentials', $credentials );
+            INFO("OAuth credentials configured via system preference");
+        } else {
+            # Invalidate cache if credentials were cleared
+            if (defined $cgi->param('auth_url') || defined $cgi->param('client_id') ||
+                defined $cgi->param('client_secret') || defined $cgi->param('notice_url')) {
+                $self->invalidate_oauth_credentials_cache();
+                INFO("OAuth credentials cache invalidated");
+            }
+
+            # If any credential field is provided, validate required fields
+            if ($auth_url || $client_id || $client_secret || $notice_url) {
+                unless ($auth_url && $client_id && $client_secret && $notice_url) {
+                    # Partial credentials provided - show error
+                    my $template = $self->get_template({file => 'configure.tt'});
+                    $template->param(
+                        archive_dir                        => $self->retrieve_data('archive_dir') || $default_archive_dir,
+                        payload_format                     => $self->retrieve_data('payload_format') || 'full',
+                        skip_odue_if_other_if_sms_or_email => $self->retrieve_data('skip_odue_if_other_if_sms_or_email'),
+                        has_oauth_credentials             => $self->has_oauth_credentials(),
+                        auth_url                           => $auth_url // '',
+                        client_id                          => $client_id // '',
+                        client_secret                      => '••••••••••••',
+                        notice_url                         => $notice_url // '',
+                        customer_id                        => $customer_id // '',
+                        error_message => 'All OAuth2 credential fields are required. Please provide auth_url, client_id, client_secret, and notice_url.',
+                    );
+                    $self->output_html($template->output());
+                    return;
+                }
+            }
+        }
+
         $self->go_home();
     }
 }
@@ -98,6 +158,9 @@ sub install() {
         make_path($default_archive_dir) or die "Failed to create path '$default_archive_dir': $!";
     }
 
+    # Migrate credentials from koha-conf.xml to system preference
+    $self->migrate_credentials_from_koha_conf();
+
     return 1;
 }
 
@@ -111,7 +174,50 @@ plugin is installed over an existing older version of a plugin
 sub upgrade {
     my ($self, $args) = @_;
 
+    # Check if migration is needed (only run once)
+    unless (C4::Context->preference('WebhookCredentials')) {
+        $self->migrate_credentials_from_koha_conf();
+    }
+
     return 1;
+}
+
+=head3 migrate_credentials_from_koha_conf
+
+Migrates OAuth2 credentials from koha-conf.xml to encrypted system preference.
+This method runs automatically during install and upgrade.
+
+=cut
+
+sub migrate_credentials_from_koha_conf {
+    my ($self) = @_;
+
+    # Check if already migrated
+    return if C4::Context->preference('WebhookCredentials');
+
+    # Check if credentials exist in koha-conf.xml
+    my $auth_url      = C4::Context->config('webhook_auth_url');
+    my $client_id     = C4::Context->config('webhook_client_id');
+    my $client_secret = C4::Context->config('webhook_client_secret');
+    my $notice_url    = C4::Context->config('webhook_notice_url');
+    my $customer_id   = C4::Context->config('webhook_customer_id');
+
+    unless ($auth_url && $client_id && $client_secret && $notice_url) {
+        return;  # No credentials to migrate
+    }
+
+    # Encrypt and store as system preference
+    my $credentials = {
+        auth_url      => $auth_url,
+        client_id     => $client_id,
+        client_secret => $client_secret,
+        notice_url    => $notice_url,
+        customer_id   => $customer_id // '',
+    };
+
+    $self->set_encrypted_syspref('WebhookCredentials', $credentials );
+
+    INFO("Migrated OAuth credentials from koha-conf.xml to system preference");
 }
 
 =head3 uninstall
@@ -132,17 +238,23 @@ sub uninstall() {
 
 Fetches an OAuth2 access token using client credentials flow.
 
+Credentials are retrieved from system preference first, with fallback to koha-conf.xml.
+
 =cut
 
 sub get_oauth_token {
     my ($self) = @_;
 
-    my $auth_url      = C4::Context->config('webhook_auth_url');
-    my $client_id     = C4::Context->config('webhook_client_id');
-    my $client_secret = C4::Context->config('webhook_client_secret');
+    my $credentials = $self->get_oauth_credentials();
+    die "No OAuth credentials configured. Please configure webhook OAuth credentials in the plugin settings or koha-conf.xml."
+        unless $credentials;
+
+    my $auth_url      = $credentials->{auth_url};
+    my $client_id     = $credentials->{client_id};
+    my $client_secret = $credentials->{client_secret};
 
     unless ($auth_url && $client_id && $client_secret) {
-        die "Missing required koha-conf.xml config: webhook_auth_url, webhook_client_id, webhook_client_secret";
+        die "Missing required OAuth credentials: auth_url, client_id, client_secret";
     }
 
     my $ua = LWP::UserAgent->new(timeout => 30);
@@ -179,13 +291,17 @@ Sends notice data to the configured webhook endpoint.
 sub send_to_webhook {
     my ($self, $params) = @_;
 
-    my $notice_url  = C4::Context->config('webhook_notice_url');
-    my $customer_id = C4::Context->config('webhook_customer_id');
+    my $credentials = $self->get_oauth_credentials();
+    die "No OAuth credentials configured. Cannot send to webhook."
+        unless $credentials;
+
+    my $notice_url  = $credentials->{notice_url};
+    my $customer_id = $credentials->{customer_id};
     my $token       = $params->{token};
     my $payload     = $params->{payload};
 
     unless ($notice_url) {
-        die "Missing required koha-conf.xml config: webhook_notice_url";
+        die "Missing notice_url in OAuth credentials";
     }
 
     my $ua = LWP::UserAgent->new(timeout => 60);
@@ -752,6 +868,200 @@ sub api_routes {
     my $spec     = decode_json($spec_str);
 
     return $spec;
+}
+
+=head3 encrypt_credentials
+
+Encrypts OAuth2 credentials using AES-256 encryption and stores them as a base64-encoded JSON string.
+
+=cut
+
+sub encrypt_credentials {
+    my ($self, $credentials) = @_;
+
+    my $json = encode_json($credentials);
+
+    # Use Koha::Encryption for AES-256 encryption
+    require Koha::Encryption;
+    my $cipher = Koha::Encryption->new;
+
+    my $encrypted = $cipher->encrypt_hex($json);
+
+    return $encrypted;
+}
+
+=head3 decrypt_credentials
+
+Decrypts encrypted OAuth2 credentials and returns them as a hashref.
+
+=cut
+
+sub decrypt_credentials {
+    my ($self, $encrypted_string) = @_;
+
+    require Koha::Encryption;
+    my $cipher = Koha::Encryption->new;
+
+    my $decrypted = $cipher->decrypt_hex($encrypted_string);
+    my $credentials = decode_json($decrypted);
+
+    return $credentials;
+}
+
+=head3 get_oauth_credentials
+
+Retrieves OAuth2 credentials with fallback from system preference to koha-conf.xml.
+
+Returns undef if credentials are not configured.
+
+=cut
+
+sub get_oauth_credentials {
+    my ($self) = @_;
+
+    # Return cached credentials if available
+    return $oauth_credentials_cache if $oauth_credentials_cache;
+
+    # Try encrypted system preference first
+    my $encrypted = C4::Context->preference('WebhookCredentials');
+    if ($encrypted) {
+        $oauth_credentials_cache = $self->decrypt_credentials($encrypted);
+        return $oauth_credentials_cache;
+    }
+
+    # Fallback to koha-conf.xml (plain text)
+    my $auth_url      = C4::Context->config('webhook_auth_url');
+    my $client_id     = C4::Context->config('webhook_client_id');
+    my $client_secret = C4::Context->config('webhook_client_secret');
+    my $notice_url    = C4::Context->config('webhook_notice_url');
+    my $customer_id   = C4::Context->config('webhook_customer_id');
+
+    if ($auth_url && $client_id && $client_secret && $notice_url) {
+        $oauth_credentials_cache = {
+            auth_url      => $auth_url,
+            client_id     => $client_id,
+            client_secret => $client_secret,
+            notice_url    => $notice_url,
+            customer_id   => $customer_id,
+        };
+        return $oauth_credentials_cache;
+    }
+
+    return;
+}
+
+=head3 has_oauth_credentials
+
+Checks if OAuth2 credentials are configured either in system preference or koha-conf.xml.
+
+=cut
+
+sub has_oauth_credentials {
+    my ($self) = @_;
+
+    return 1 if C4::Context->preference('WebhookCredentials');
+    return 1 if (C4::Context->config('webhook_auth_url') &&
+                 C4::Context->config('webhook_client_id') &&
+                 C4::Context->config('webhook_client_secret') &&
+                 C4::Context->config('webhook_notice_url'));
+    return 0;
+}
+
+=head3 get_display_auth_url
+
+Returns the display value for the auth URL, checking system preference first then koha-conf.xml.
+
+=cut
+
+sub get_display_auth_url {
+    my ($self) = @_;
+    my $syspref = $self->get_decrypted_syspref('WebhookCredentials');
+    return $syspref->{auth_url} if $syspref;
+    return C4::Context->config('webhook_auth_url') // '';
+}
+
+=head3 get_display_client_id
+
+Returns the display value for the client ID, checking system preference first then koha-conf.xml.
+
+=cut
+
+sub get_display_client_id {
+    my ($self) = @_;
+    my $syspref = $self->get_decrypted_syspref('WebhookCredentials');
+    return $syspref->{client_id} if $syspref;
+    return C4::Context->config('webhook_client_id') // '';
+}
+
+=head3 get_display_notice_url
+
+Returns the display value for the notice URL, checking system preference first then koha-conf.xml.
+
+=cut
+
+sub get_display_notice_url {
+    my ($self) = @_;
+    my $syspref = $self->get_decrypted_syspref('WebhookCredentials');
+    return $syspref->{notice_url} if $syspref;
+    return C4::Context->config('webhook_notice_url') // '';
+}
+
+=head3 get_display_customer_id
+
+Returns the display value for the customer ID, checking system preference first then koha-conf.xml.
+
+=cut
+
+sub get_display_customer_id {
+    my ($self) = @_;
+    my $syspref = $self->get_decrypted_syspref('WebhookCredentials');
+    return $syspref->{customer_id} // '' if $syspref;
+    return C4::Context->config('webhook_customer_id') // '';
+}
+
+=head3 get_decrypted_syspref
+
+Retrieves and decrypts webhook credentials from system preference.
+
+=cut
+
+sub get_decrypted_syspref {
+    my ($self, $preference_name) = @_;
+
+    my $syspref = C4::Context->preference($preference_name);
+    my $decrypted_json = $self->decrypt_credentials($syspref);
+    my $decrypted = decode_json( $decrypted_json );
+
+    return $decrypted;
+
+}
+=head3 set_encrypted_syspref
+
+Encrypts and stores OAuth2 credentials as a system preference.
+
+=cut
+
+sub set_encrypted_syspref {
+    my ($self, $preference_name, $credentials) = @_;
+
+    my $encrypted = $self->encrypt_credentials($credentials);
+
+    C4::Context->set_preference($preference_name, $encrypted);
+
+    # Invalidate cache to ensure next credential retrieval fetches new values
+    $oauth_credentials_cache = undef;
+}
+
+=head3 invalidate_oauth_credentials_cache
+
+Explicitly invalidates the OAuth2 credentials cache. Useful when credentials
+have been updated via admin interface.
+
+=cut
+
+sub invalidate_oauth_credentials_cache {
+    my ($self) = @_;
+    $oauth_credentials_cache = undef;
 }
 
 sub api_namespace {

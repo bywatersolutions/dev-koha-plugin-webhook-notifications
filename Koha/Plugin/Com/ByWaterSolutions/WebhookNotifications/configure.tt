@@ -14,20 +14,61 @@
     <h1>Webhook Notifications Configuration</h1>
 
     <div class="alert alert-info">
-        <strong>Note:</strong> Authentication and endpoint settings are configured via environment variables:
-        <ul>
-            <li><code>WEBHOOK_AUTH_URL</code> - OAuth2 token endpoint (required)</li>
-            <li><code>WEBHOOK_CLIENT_ID</code> - OAuth2 client ID (required)</li>
-            <li><code>WEBHOOK_CLIENT_SECRET</code> - OAuth2 client secret (required)</li>
-            <li><code>WEBHOOK_NOTICE_URL</code> - Webhook endpoint for notices (required)</li>
-            <li><code>WEBHOOK_CUSTOMER_ID</code> - Customer ID header value (optional, required by some APIs)</li>
-        </ul>
+	<strong>Additional Information:</strong>
+	<ul>
+	    <li>Credentials are encrypted using AES-256 encryption</li>
+	    <li>You can configure credentials either through this form or via koha-conf.xml (for backward compatibility)</li>
+	    <li>If you previously configured via koha-conf.xml, they will be automatically migrated to an encrypted local system preference: WebhookCredentials</li>
+	</ul>
     </div>
 
     <form method="get">
       <input type="hidden" name="class" value="[% CLASS %]"/>
       <input type="hidden" name="method" value="[% METHOD %]"/>
       <input type="hidden" name="save" value="1" />
+
+      <fieldset>
+        <legend>OAuth2 Credentials</legend>
+        [% IF has_oauth_credentials %]
+        <div class="alert alert-success">
+            <strong>Credentials are configured</strong> via system preference. To update credentials, leave all fields blank and save, or clear the fields and re-enter new credentials below.
+        </div>
+        [% ELSE %]
+        <div class="alert alert-warning">
+            <strong>No credentials configured</strong> yet. Please enter your OAuth2 credentials below.
+        </div>
+        [% END %]
+
+        <div class="form-group">
+          <label for="auth_url">OAuth2 Token Endpoint URL</label>
+          <input type="url" name="auth_url" id="auth_url" class="form-control" value="[% auth_url %]" placeholder="https://oauth.provider.com/token">
+          <p class="help-block">The URL where your OAuth2 provider issues access tokens (e.g., AWS Cognito, custom OAuth2 server).</p>
+        </div>
+
+        <div class="form-group">
+          <label for="client_id">Client ID</label>
+          <input type="text" name="client_id" id="client_id" class="form-control" value="[% client_id %]" placeholder="your_client_id">
+          <p class="help-block">Your OAuth2 client identifier from the provider.</p>
+        </div>
+
+        <div class="form-group">
+          <label for="client_secret">Client Secret</label>
+          <input type="password" name="client_secret" id="client_secret" class="form-control" value="[% client_secret %]" placeholder="••••••••••••">
+          <p class="help-block">Your OAuth2 client secret (will be encrypted and stored securely).</p>
+        </div>
+
+        <div class="form-group">
+          <label for="notice_url">Webhook Endpoint URL</label>
+          <input type="url" name="notice_url" id="notice_url" class="form-control" value="[% notice_url %]" placeholder="https://webhook.endpoint.com/notify">
+          <p class="help-block">The URL where webhook notifications should be sent.</p>
+        </div>
+
+        <div class="form-group">
+          <label for="customer_id">Customer ID (Optional)</label>
+          <input type="text" name="customer_id" id="customer_id" class="form-control" value="[% customer_id %]" placeholder="optional_customer_id">
+          <p class="help-block">Optional customer identifier sent in the customer-id header (required by some APIs).</p>
+        </div>
+      </fieldset>
 
       <fieldset>
         <legend>Payload Settings</legend>
